@@ -175,7 +175,6 @@ _order_fill_state: dict[str, float] = {}
 
 def handle_order_fill(
     event: dict[str, Any],
-    api_key: str,
 ) -> dict[str, Any] | None:
     """
     Process an order event from the User channel.
@@ -193,12 +192,6 @@ def handle_order_fill(
     # The event_type for order events is "order" (lowercase)
     event_type = event.get("event_type", "")
     if event_type != "order":
-        return None
-
-    # Verify this is our order
-    owner = event.get("owner", "")
-    if owner != api_key:
-        logger.debug(f"Order event for different owner: {owner[:16]}...")
         return None
 
     order_id = event.get("id", "")
@@ -338,9 +331,7 @@ async def listen_for_trades() -> None:
                             event_type = event.get("event_type", "")
 
                             if event_type == "order":
-                                trade = handle_order_fill(
-                                    event, POLYMARKET_API_KEY
-                                )
+                                trade = handle_order_fill(event)
                                 if trade:
                                     # Resolve market name
                                     asset_id = trade.get("asset_id", "")
