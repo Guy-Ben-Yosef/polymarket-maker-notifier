@@ -19,6 +19,7 @@ import httpx
 from config import Settings
 from console import Console
 from models import Fill
+from orders import OrderTracker
 from wsbase import AuthFailed, OnFill, WSListener
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class PerpsListener(WSListener):
         self._instruments_loaded_at = 0.0
         self._last_sq: int | None = None
         self._backfill_from: float | None = last_ts
+        self.orders = OrderTracker()
 
     # ── session ────────────────────────────────────────────────────────
 
@@ -96,7 +98,7 @@ class PerpsListener(WSListener):
             err = data.get("error") if isinstance(data, dict) else None
             raise AuthFailed(str(err or ack))
 
-        await ws.send(json.dumps({"id": SUB_ID, "req": "sub", "chs": ["fills"]}))
+        await ws.send(json.dumps({"id": SUB_ID, "req": "sub", "chs": ["fills", "orders"]}))
         self.console.panel(
             "[bold]Connected[/bold]\n[dim]Listening on the private fills channel…[/dim]",
             title="[bold green]Perps active[/bold green]",
@@ -153,14 +155,20 @@ class PerpsListener(WSListener):
         ch = str(msg.get("ch", ""))
         self._check_sequence(ch, msg.get("sq"))
 
+        data = msg.get("data")
+        records = data if isinstance(data, list) else [data]
+
         if ch == "fills":
-            data = msg.get("data")
-            records = data if isinstance(data, list) else [data]
             for rec in records:
                 if isinstance(rec, dict):
                     fill = await self.parse_fill(rec)
                     if fill:
+                        await self._attach_progress(fill)
                         await self.on_fill(fill)
+        elif ch == "orders":
+            for rec in records:
+                if isinstance(rec, dict):
+                    self._update_order(rec)
         elif ch == "resync":
             logger.warning("[PERPS] server requested resync — running backfill")
             await self._backfill()
@@ -225,6 +233,49 @@ class PerpsListener(WSListener):
             trade_id=tid,
             flags=",".join(flags),
         )
+
+    # ── order progress ─────────────────────────────────────────────────
+
+    def _update_order(self, rec: dict[str, Any]) -> None:
+        """Accepts the WS `orders` schema (oid/qty/fill) or REST long names."""
+        oid = str(_first(rec, "oid", "order_id", default=""))
+        original = _f(_first(rec, "qty", "quantity", "size"))
+        filled = _f(_first(rec, "fill", "filled", "filled_quantity", "filled_size"))
+        if oid and original > 0:
+            self.orders.update(oid, original, filled)
+            logger.debug(f"[PERPS] order {oid}: {filled}/{original} {rec.get('status', '')}")
+
+    async def _attach_progress(self, fill: Fill) -> None:
+        if not fill.order_id:
+            return
+        res = self.orders.record_fill(fill.order_id, fill.key, fill.size)
+        if res is None:
+            rec = await self._fetch_order(fill.order_id)
+            if rec:
+                self._update_order(rec)
+                res = self.orders.record_fill(fill.order_id, fill.key, fill.size)
+        if res:
+            fill.filled_total, fill.original_size = res
+
+    async def _fetch_order(self, oid: str) -> dict[str, Any] | None:
+        try:
+            r = await asyncio.wait_for(
+                self.http.get(
+                    f"{REST_URL}/v1/account/orders",
+                    params={"order_id": oid},
+                    headers=self._auth_headers(),
+                ),
+                timeout=self.settings.name_lookup_timeout + 1,
+            )
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:
+            logger.info(f"[PERPS] order lookup failed for {oid}: {e}")
+            return None
+        data = body.get("data", body) if isinstance(body, dict) else body
+        if isinstance(data, list):
+            data = data[0] if data else None
+        return data if isinstance(data, dict) else None
 
     # ── instruments ────────────────────────────────────────────────────
 
@@ -306,6 +357,7 @@ class PerpsListener(WSListener):
         for rec in records:
             fill = await self.parse_fill(rec)
             if fill:
+                await self._attach_progress(fill)
                 await self.on_fill(fill)
         logger.info(f"[PERPS] backfill checked {len(records)} fills since {start_ms}")
         self._backfill_from = time.time()

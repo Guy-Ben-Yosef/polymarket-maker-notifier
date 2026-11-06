@@ -25,6 +25,7 @@ import httpx
 from config import Settings
 from console import Console
 from models import Fill
+from orders import OrderTracker
 from wsbase import OnFill, WSListener
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class ClobListener(WSListener):
         self._names: dict[str, str] = {}
         self._backfill_from: float | None = last_ts
         self._backfill_warned = False
+        self.orders = OrderTracker()
 
     # ── session ────────────────────────────────────────────────────────
 
@@ -130,15 +132,21 @@ class ClobListener(WSListener):
 
         if etype == "trade" or sub in _TRADE_TYPES:
             for fill in self.parse_trade(event):
-                if fill.asset_id:
-                    fill.market = await self.resolve_name(fill.asset_id)
+                await self._enrich(fill)
                 await self.on_fill(fill)
         elif etype == "order" or sub in _ORDER_TYPES:
+            order_id = str(event.get("id", ""))
             logger.debug(
-                f"[CLOB] order {sub}: id={str(event.get('id', ''))[:18]}… "
+                f"[CLOB] order {sub}: id={order_id[:18]}… "
                 f"matched={event.get('size_matched')}/{event.get('original_size')} "
                 f"status={event.get('status')}"
             )
+            if sub == "CANCELLATION":
+                self.orders.forget(order_id)
+            else:
+                self.orders.update(
+                    order_id, _f(event.get("original_size")), _f(event.get("size_matched"))
+                )
         else:
             logger.debug(f"[CLOB] other event: {etype or sub or '?'}")
 
@@ -231,6 +239,44 @@ class ClobListener(WSListener):
             )
         return fills
 
+    # ── enrichment: market name + order progress ───────────────────────
+
+    async def _enrich(self, fill: Fill) -> None:
+        if fill.asset_id:
+            fill.market = await self.resolve_name(fill.asset_id)
+        await self._attach_progress(fill)
+
+    async def _attach_progress(self, fill: Fill) -> None:
+        if not fill.order_id:
+            return
+        res = self.orders.record_fill(fill.order_id, fill.key, fill.size)
+        if res is None and self._wallet:
+            snap = await self._fetch_order(fill.order_id)
+            if snap:
+                self.orders.update(fill.order_id, *snap)
+                res = self.orders.record_fill(fill.order_id, fill.key, fill.size)
+        if res:
+            fill.filled_total, fill.original_size = res
+
+    async def _fetch_order(self, order_id: str) -> tuple[float, float] | None:
+        """Return (original_size, size_matched) for one of our orders via REST."""
+        path = f"/data/order/{order_id}"
+        try:
+            r = await asyncio.wait_for(
+                self.http.get(f"{REST_URL}{path}", headers=self._l2_headers("GET", path)),
+                timeout=self.settings.name_lookup_timeout + 1,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logger.info(f"[CLOB] order lookup failed for {order_id[:18]}…: {e}")
+            return None
+        if not isinstance(data, dict):
+            return None
+        original = _f(data.get("original_size"))
+        matched = _f(data.get("size_matched"))
+        return (original, matched) if original > 0 else None
+
     # ── market names ───────────────────────────────────────────────────
 
     async def resolve_name(self, token_id: str) -> str:
@@ -289,8 +335,7 @@ class ClobListener(WSListener):
         count = 0
         for t in trades:
             for fill in self.parse_trade(t):
-                if fill.asset_id:
-                    fill.market = await self.resolve_name(fill.asset_id)
+                await self._enrich(fill)
                 await self.on_fill(fill)
                 count += 1
         logger.info(f"[CLOB] backfill checked {len(trades)} trades since {since}")

@@ -66,15 +66,19 @@ class Console:
         text.append(f"{fmt_num(f.price)}\n", style="yellow")
         text.append("Total: ", style="dim")
         text.append(f"{fmt_num(f.notional, 2)}", style=f"bold {color}")
+        if f.progress:
+            text.append("\nOrder: ", style="dim")
+            text.append(f"{f.progress} filled ({f.fill_status})", style="bold")
         if f.fee:
             text.append(f"\nFee: {f.fee:g} {f.fee_asset}", style="dim")
         if f.flags:
             text.append(f"\n{f.flags}", style="bold yellow")
 
+        label = f"{f.venue} {f.role} {f.fill_status.lower()} fill".replace("  ", " ")
         self._rich.print(
             Panel(
                 text,
-                title=f"[bold {color}]{f.venue} {f.role} fill[/bold {color}]",
+                title=f"[bold {color}]{label}[/bold {color}]",
                 subtitle=f"[dim]{f.time_str}[/dim]",
                 border_style=color,
             )

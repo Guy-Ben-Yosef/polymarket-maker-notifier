@@ -40,8 +40,12 @@ class TelegramNotifier:
         unit = "contracts" if f.venue == "PERPS" else "shares"
         quote = "pUSD" if f.venue == "PERPS" else "USDC"
 
+        status = f.fill_status
+        headline = f"{arrow} {f.role} {f.side}"
+        if status:
+            headline += f" · {status} FILL"
         lines = [
-            f"*{escape_md2(f'{arrow} {f.role} {f.side}')}* · {escape_md2(venue)}",
+            f"*{escape_md2(headline)}* · {escape_md2(venue)}",
             "",
             f"*Market:* {escape_md2(f.market)}",
         ]
@@ -52,6 +56,8 @@ class TelegramNotifier:
             f"*Price:* {escape_md2(fmt_num(f.price))}",
             f"*Total:* {escape_md2(f'{fmt_num(f.notional, 2)} {quote}')}",
         ]
+        if f.progress:
+            lines.append(f"*Order:* {escape_md2(f'{f.progress} {unit} filled ({status})')}")
         if f.fee:
             lines.append(f"*Fee:* {escape_md2(f'{f.fee:g} {f.fee_asset}'.strip())}")
         if f.flags:

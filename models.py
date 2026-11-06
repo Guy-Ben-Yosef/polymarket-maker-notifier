@@ -33,10 +33,26 @@ class Fill:
     trade_id: str = ""
     asset_id: str = ""  # CLOB token id — used for name lookup
     flags: str = ""     # e.g. "LIQUIDATION", "ADL", "SETTLEMENT"
+    filled_total: float | None = None    # cumulative filled on the order
+    original_size: float | None = None   # the order's original size
 
     @property
     def notional(self) -> float:
         return self.size * self.price
+
+    @property
+    def fill_status(self) -> str:
+        """'FULL', 'PARTIAL', or '' when the order size is unknown."""
+        if self.filled_total is None or not self.original_size:
+            return ""
+        return "FULL" if self.filled_total >= self.original_size - 1e-9 else "PARTIAL"
+
+    @property
+    def progress(self) -> str:
+        """e.g. '170/200', or '' when unknown."""
+        if self.filled_total is None or not self.original_size:
+            return ""
+        return f"{fmt_num(self.filled_total)}/{fmt_num(self.original_size)}"
 
     @property
     def is_maker(self) -> bool:
@@ -60,6 +76,8 @@ class Fill:
             parts.append(f"outcome={self.outcome}")
         parts.append(f"size={fmt_num(self.size)} @ {fmt_num(self.price)}")
         parts.append(f"notional={fmt_num(self.notional, 2)}")
+        if self.progress:
+            parts.append(f"order={self.progress} {self.fill_status}")
         if self.fee:
             parts.append(f"fee={self.fee:g} {self.fee_asset}".rstrip())
         if self.flags:

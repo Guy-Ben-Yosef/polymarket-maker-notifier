@@ -10,6 +10,7 @@ on Polymarket prediction markets (CLOB) and on Polymarket Perps.
   - CLOB: uses the `trade` event's `trader_side` and your entry in `maker_orders`
   - Perps: uses the fill's `taker` flag
 - 🏦 **Two venues** — CLOB and Perps run side by side; enable either or both
+- 📊 **Order progress** in every alert — e.g. `170/200 shares filled (PARTIAL)` or `(FULL)`
 - 🔁 **No missed fills** — REST backfill after every (re)connect, persisted de-duplication
 - 💓 **Keepalive + watchdog** — venue-specific pings; reconnects on silence
 - 📱 **Telegram** to multiple chats, sent in parallel, with retries and rate-limit handling
@@ -96,6 +97,14 @@ Each trade arrives several times (`MATCHED → MINED → CONFIRMED`); the key
 
 **Perps.** The private `fills` channel sends one record per execution with
 `taker: true|false`. `false` → maker.
+
+**Order progress.** `order` events (CLOB: `original_size`/`size_matched`;
+Perps `orders` channel: `qty`/`fill`) are cached per order. Each alert reports
+the larger of the venue's matched size and the running sum of fills seen, so
+the figure is right whether the order update arrives before or after the fill.
+Orders placed before the service started are fetched once over REST
+(`/data/order/{id}` needs `POLYMARKET_WALLET`). When the size cannot be
+determined the alert omits the progress line.
 
 The stream does not replay missed events, so after each connect the service
 fetches recent fills over REST (`/data/trades` for CLOB, `/v1/account/fills`
