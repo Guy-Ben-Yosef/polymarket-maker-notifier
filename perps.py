@@ -91,9 +91,10 @@ class PerpsListener(WSListener):
         )
         # Wait for the auth acknowledgement before subscribing.
         ack = await self._await_response(ws, AUTH_ID)
-        data = ack.get("data") or {}
-        if data.get("status") != "ok":
-            raise AuthFailed(str(data.get("error") or ack))
+        data = ack.get("data")
+        if not isinstance(data, dict) or data.get("status") != "ok":
+            err = data.get("error") if isinstance(data, dict) else None
+            raise AuthFailed(str(err or ack))
 
         await ws.send(json.dumps({"id": SUB_ID, "req": "sub", "chs": ["fills"]}))
         self.console.panel(
@@ -133,14 +134,18 @@ class PerpsListener(WSListener):
     async def _handle_message(self, msg: dict[str, Any]) -> None:
         if "id" in msg and "ch" not in msg:
             rid = msg.get("id")
-            data = msg.get("data") or {}
+            data = msg.get("data")
             if rid == PING_ID:
                 return
+            # Responses may carry a dict ({"status": ...}) or a list
+            # (e.g. the channels now subscribed). Treat only an explicit
+            # non-ok status as a failure.
+            status = data.get("status") if isinstance(data, dict) else None
             if rid == SUB_ID:
-                if data.get("status") not in (None, "ok"):
+                if status not in (None, "ok"):
                     logger.error(f"[PERPS] subscribe failed: {data}")
                 else:
-                    logger.debug(f"[PERPS] subscribe ack: {data}")
+                    logger.info(f"[PERPS] subscribe ack: {data}")
                 return
             logger.debug(f"[PERPS] response id={rid}: {data}")
             return

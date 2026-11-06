@@ -38,10 +38,14 @@ def setup_logging(s: Settings) -> None:
         )
     else:
         handler = logging.FileHandler(s.log_file, encoding="utf-8")
+    # Warnings and errors also go to stderr so hosted log viewers (Railway)
+    # show them without access to the log file.
+    stderr = logging.StreamHandler(sys.stderr)
+    stderr.setLevel(logging.WARNING)
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        handlers=[handler],
+        handlers=[handler, stderr],
     )
     for noisy in ("httpx", "httpcore", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
