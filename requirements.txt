@@ -1,5 +1,5 @@
 websockets>=12.0
 httpx>=0.25
 python-dotenv>=1.0
-urllib3>=2.0
+# Optional: pretty terminal output. The app falls back to plain print() without it.
 rich>=13.0

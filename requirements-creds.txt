@@ -1,0 +1,4 @@
+# Only needed to run the credential helper scripts, not the notifier itself.
+-r requirements.txt
+py-clob-client>=0.17      # generate_creds.py (CLOB API key)
+eth-account>=0.10         # generate_perps_creds.py (Perps proxy signer)
