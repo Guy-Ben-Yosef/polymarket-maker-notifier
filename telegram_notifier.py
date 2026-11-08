@@ -34,30 +34,35 @@ class TelegramNotifier:
 
     @staticmethod
     def format_fill(f: Fill) -> str:
-        is_long = f.side in ("BUY", "LONG")
-        arrow = "📈" if is_long else "📉"
-        venue = "Perps" if f.venue == "PERPS" else "Polymarket"
-        unit = "contracts" if f.venue == "PERPS" else "shares"
-        quote = "pUSD" if f.venue == "PERPS" else "USDC"
+        """
+        🟤🟠 Market name          (🟤 buy / 🔵 sell, 🟢 full / 🟠 partial)
 
-        status = f.fill_status
-        headline = f"{arrow} {f.role} {f.side}"
-        if status:
-            headline += f" · {status} FILL"
-        lines = [
-            f"*{escape_md2(headline)}* · {escape_md2(venue)}",
-            "",
-            f"*Market:* {escape_md2(f.market)}",
-        ]
+        Outcome: No
+        Size: 111.1111 shares
+        Price: 0.991
+        Total: 110.11 USDC
+        Order: 111.1111/200 shares filled
+        Cash: 376.94 USDC
+
+        2026-11-07 13:07:03
+        """
+        headline = f"{f.symbols} {f.market}"
+        if f.venue == "PERPS":
+            headline += f" · {f.side}"
+        if not f.is_maker:
+            headline += " · TAKER"
+        lines = [f"*{escape_md2(headline)}*", ""]
         if f.outcome:
             lines.append(f"*Outcome:* {escape_md2(f.outcome)}")
         lines += [
-            f"*Size:* {escape_md2(f'{fmt_num(f.size)} {unit}')}",
+            f"*Size:* {escape_md2(f'{fmt_num(f.size)} {f.unit}')}",
             f"*Price:* {escape_md2(fmt_num(f.price))}",
-            f"*Total:* {escape_md2(f'{fmt_num(f.notional, 2)} {quote}')}",
+            f"*Total:* {escape_md2(f'{fmt_num(f.notional, 2)} {f.quote}')}",
         ]
         if f.progress:
-            lines.append(f"*Order:* {escape_md2(f'{f.progress} {unit} filled ({status})')}")
+            lines.append(f"*Order:* {escape_md2(f'{f.progress} {f.unit} filled')}")
+        if f.cash_str:
+            lines.append(f"*Cash:* {escape_md2(f.cash_str)}")
         if f.fee:
             lines.append(f"*Fee:* {escape_md2(f'{f.fee:g} {f.fee_asset}'.strip())}")
         if f.flags:

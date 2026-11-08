@@ -78,6 +78,7 @@ class ClobListener(WSListener):
         self._names: dict[str, str] = {}
         self._backfill_from: float | None = last_ts
         self._backfill_warned = False
+        self._sig_type: int | None = None  # detected on first balance lookup
         self.orders = OrderTracker()
 
     # ── session ────────────────────────────────────────────────────────
@@ -276,6 +277,75 @@ class ClobListener(WSListener):
         original = _f(data.get("original_size"))
         matched = _f(data.get("size_matched"))
         return (original, matched) if original > 0 else None
+
+    # ── free cash ──────────────────────────────────────────────────────
+
+    async def free_cash(self) -> tuple[float, str] | None:
+        """
+        USDC available for new orders: the wallet's collateral balance minus
+        the cost of the still-open BUY orders. Returns (amount, "USDC") or
+        None when either lookup fails.
+        """
+        balance = await self._collateral_balance()
+        if balance is None:
+            return None
+        reserved = await self._open_buy_reserve()
+        if reserved is None:
+            return None
+        return max(balance - reserved, 0.0), "USDC"
+
+    async def _collateral_balance(self) -> float | None:
+        """
+        GET /balance-allowance?asset_type=COLLATERAL. The server derives the
+        funding wallet from the signer address and `signature_type`
+        (1 = Polymarket proxy wallet, 2 = Gnosis Safe, 0 = plain EOA). The
+        first type that reports a balance is cached for later calls.
+        """
+        path = "/balance-allowance"
+        types = [self._sig_type] if self._sig_type is not None else [1, 2, 0]
+        for sig_type in types:
+            params = {"asset_type": "COLLATERAL", "signature_type": sig_type}
+            try:
+                r = await self.http.get(
+                    f"{REST_URL}{path}", params=params, headers=self._l2_headers("GET", path)
+                )
+                r.raise_for_status()
+                raw = r.json().get("balance", "0")
+            except Exception as e:
+                logger.info(f"[CLOB] balance lookup failed (signature_type={sig_type}): {e}")
+                return None
+            balance = int(raw) / 1e6  # USDC has 6 decimals
+            if balance > 0 or self._sig_type is not None:
+                self._sig_type = sig_type
+                return balance
+        return 0.0
+
+    async def _open_buy_reserve(self) -> float | None:
+        """Sum of (remaining size × price) over our open BUY orders."""
+        path = "/data/orders"
+        reserved = 0.0
+        cursor = "MA=="
+        for _ in range(50):  # pagination guard
+            try:
+                r = await self.http.get(
+                    f"{REST_URL}{path}",
+                    params={"next_cursor": cursor},
+                    headers=self._l2_headers("GET", path),
+                )
+                r.raise_for_status()
+                body = r.json()
+            except Exception as e:
+                logger.info(f"[CLOB] open orders lookup failed: {e}")
+                return None
+            orders = body.get("data", []) if isinstance(body, dict) else body
+            for o in orders or []:
+                if o.get("side") == "BUY":
+                    remaining = _f(o.get("original_size")) - _f(o.get("size_matched"))
+                    reserved += max(remaining, 0.0) * _f(o.get("price"))
+            cursor = body.get("next_cursor", "LTE=") if isinstance(body, dict) else "LTE="
+            if not cursor or cursor == "LTE=":
+                break
+        return reserved
 
     # ── market names ───────────────────────────────────────────────────
 

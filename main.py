@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 from logging.handlers import RotatingFileHandler
 
 import httpx
@@ -24,6 +25,9 @@ from state import FillState
 from telegram_notifier import TelegramNotifier
 
 logger = logging.getLogger("notifier")
+
+CashSource = Callable[[], Awaitable[tuple[float, str] | None]]
+CASH_LOOKUP_TIMEOUT = 8.0  # seconds; the alert goes out without cash after this
 
 
 def setup_logging(s: Settings) -> None:
@@ -63,6 +67,8 @@ class Pipeline:
         self.state = state
         self.console = console
         self.notifier = notifier
+        # venue -> coroutine returning (free cash, asset) or None
+        self.cash_sources: dict[str, CashSource] = {}
         self._tasks: set[asyncio.Task] = set()
 
     async def on_fill(self, fill: Fill) -> None:
@@ -77,18 +83,35 @@ class Pipeline:
             self.console.print(f"[dim]· taker fill (no alert): {fill.summary()}[/dim]")
             return
 
-        self.console.fill(fill)
-        if self.notifier:
-            # Fire-and-forget so the WebSocket loop is never blocked by Telegram.
-            task = asyncio.create_task(self._notify(fill))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+        # Fire-and-forget so the WebSocket loop is never blocked by REST or Telegram.
+        task = asyncio.create_task(self._alert(fill))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
-    async def _notify(self, fill: Fill) -> None:
-        ok = await self.notifier.send_fill(fill)  # type: ignore[union-attr]
+    async def _alert(self, fill: Fill) -> None:
+        await self._attach_cash(fill)
+        self.console.fill(fill)
+        if not self.notifier:
+            return
+        ok = await self.notifier.send_fill(fill)
         self.console.print(
             "[dim]✓ Telegram alert sent[/dim]" if ok else "[red]✗ Telegram alert failed[/red]"
         )
+
+    async def _attach_cash(self, fill: Fill) -> None:
+        source = self.cash_sources.get(fill.venue)
+        if source is None:
+            return
+        try:
+            res = await asyncio.wait_for(source(), timeout=CASH_LOOKUP_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"{fill.venue} cash lookup timed out; alert sent without cash")
+            return
+        except Exception as e:
+            logger.warning(f"{fill.venue} cash lookup failed: {e}")
+            return
+        if res:
+            fill.cash, fill.cash_asset = res
 
     async def drain(self) -> None:
         if self._tasks:
@@ -113,7 +136,7 @@ async def run(s: Settings, console: Console) -> None:
             console.print("[yellow]⚠ SSL verification is DISABLED (SSL_VERIFY=false)[/yellow]")
 
         pipeline = Pipeline(state, console, notifier)
-        listeners = []
+        listeners: list[ClobListener | PerpsListener] = []
         if s.clob_enabled:
             listeners.append(
                 ClobListener(s, console, pipeline.on_fill, http, state.last_ts.get("CLOB"))
@@ -122,6 +145,8 @@ async def run(s: Settings, console: Console) -> None:
             listeners.append(
                 PerpsListener(s, console, pipeline.on_fill, http, state.last_ts.get("PERPS"))
             )
+        for l in listeners:
+            pipeline.cash_sources[l.name] = l.free_cash
 
         try:
             await asyncio.gather(*(l.run() for l in listeners))

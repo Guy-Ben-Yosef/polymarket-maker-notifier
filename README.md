@@ -10,7 +10,9 @@ on Polymarket prediction markets (CLOB) and on Polymarket Perps.
   - CLOB: uses the `trade` event's `trader_side` and your entry in `maker_orders`
   - Perps: uses the fill's `taker` flag
 - 🏦 **Two venues** — CLOB and Perps run side by side; enable either or both
-- 📊 **Order progress** in every alert — e.g. `170/200 shares filled (PARTIAL)` or `(FULL)`
+- 📊 **Order progress** in every alert — e.g. `170/200 shares filled`, with
+  🟤 buy / 🔵 sell and 🟢 full / 🟠 partial symbols in the headline
+- 💵 **Free cash** of the venue wallet in every alert (balance minus open buy orders)
 - 🔁 **No missed fills** — REST backfill after every (re)connect, persisted de-duplication
 - 💓 **Keepalive + watchdog** — venue-specific pings; reconnects on silence
 - 📱 **Telegram** to multiple chats, sent in parallel, with retries and rate-limit handling
@@ -104,7 +106,15 @@ the larger of the venue's matched size and the running sum of fills seen, so
 the figure is right whether the order update arrives before or after the fill.
 Orders placed before the service started are fetched once over REST
 (`/data/order/{id}` needs `POLYMARKET_WALLET`). When the size cannot be
-determined the alert omits the progress line.
+determined the alert omits the progress line and the status symbol.
+
+**Free cash.** Fetched when the alert is built (so the WebSocket loop is never
+blocked). CLOB: `/balance-allowance` collateral balance minus the remaining
+cost of open BUY orders from `/data/orders`; the wallet type
+(`signature_type` 1 = proxy wallet, 2 = Gnosis Safe, 0 = EOA) is detected on
+the first lookup. Perps: `margin.available_order_margin` from
+`/v1/account/portfolio`. The line is omitted when the lookup fails or takes
+more than 8 s.
 
 The stream does not replay missed events, so after each connect the service
 fetches recent fills over REST (`/data/trades` for CLOB, `/v1/account/fills`

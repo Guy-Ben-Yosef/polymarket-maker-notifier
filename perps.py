@@ -277,6 +277,29 @@ class PerpsListener(WSListener):
             data = data[0] if data else None
         return data if isinstance(data, dict) else None
 
+    # ── free cash ──────────────────────────────────────────────────────
+
+    async def free_cash(self) -> tuple[float, str] | None:
+        """
+        pUSD available for new orders: `margin.available_order_margin` from
+        GET /v1/account/portfolio. Returns (amount, "pUSD") or None on error.
+        """
+        try:
+            r = await self.http.get(f"{REST_URL}/v1/account/portfolio", headers=self._auth_headers())
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:
+            logger.info(f"[PERPS] portfolio lookup failed: {e}")
+            return None
+        data = body.get("data", body) if isinstance(body, dict) else {}
+        margin = data.get("margin", {}) if isinstance(data, dict) else {}
+        value = _first(margin, "available_order_margin", default=None)
+        if value is None:
+            value = _first(data, "withdrawable", default=None) if isinstance(data, dict) else None
+        if value is None:
+            return None
+        return max(_f(value), 0.0), "pUSD"
+
     # ── instruments ────────────────────────────────────────────────────
 
     async def instrument_name(self, iid: int) -> str:

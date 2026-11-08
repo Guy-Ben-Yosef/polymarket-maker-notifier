@@ -44,9 +44,8 @@ class Console:
             print("====", flush=True)
 
     def fill(self, f: Fill) -> None:
-        is_long = f.side in ("BUY", "LONG")
-        color = "green" if is_long else "red"
-        symbol = "📈" if is_long else "📉"
+        color = "green" if f.is_long else "red"
+        symbol = f.symbols
 
         if not self._rich:
             print(f"🔔 {symbol} {f.summary()} | {f.time_str}", flush=True)
@@ -54,9 +53,7 @@ class Console:
 
         text: Any = Text()
         text.append(f"{symbol} ", style="bold")
-        text.append(f"{f.side}\n", style=f"bold {color}")
-        text.append("Market: ", style="dim")
-        text.append(f"{f.market}\n", style="white")
+        text.append(f"{f.market}\n", style=f"bold {color}")
         if f.outcome:
             text.append("Outcome: ", style="dim")
             text.append(f"{f.outcome}\n", style="magenta")
@@ -68,7 +65,10 @@ class Console:
         text.append(f"{fmt_num(f.notional, 2)}", style=f"bold {color}")
         if f.progress:
             text.append("\nOrder: ", style="dim")
-            text.append(f"{f.progress} filled ({f.fill_status})", style="bold")
+            text.append(f"{f.progress} {f.unit} filled", style="bold")
+        if f.cash_str:
+            text.append("\nCash: ", style="dim")
+            text.append(f.cash_str, style="bold")
         if f.fee:
             text.append(f"\nFee: {f.fee:g} {f.fee_asset}", style="dim")
         if f.flags:

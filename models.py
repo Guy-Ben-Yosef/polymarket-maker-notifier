@@ -14,6 +14,10 @@ def fmt_num(x: float, decimals: int = 4) -> str:
     return s or "0"
 
 
+SIDE_SYMBOLS = {"BUY": "🟤", "SELL": "🔵"}       # LONG → BUY, SHORT → SELL
+STATUS_SYMBOLS = {"FULL": "🟢", "PARTIAL": "🟠"}
+
+
 @dataclass
 class Fill:
     """One execution of one of our orders, on either venue."""
@@ -35,10 +39,44 @@ class Fill:
     flags: str = ""     # e.g. "LIQUIDATION", "ADL", "SETTLEMENT"
     filled_total: float | None = None    # cumulative filled on the order
     original_size: float | None = None   # the order's original size
+    cash: float | None = None            # free cash on the venue wallet at alert time
+    cash_asset: str = ""                 # "USDC" (CLOB) / "pUSD" (Perps)
 
     @property
     def notional(self) -> float:
         return self.size * self.price
+
+    @property
+    def unit(self) -> str:
+        return "contracts" if self.venue == "PERPS" else "shares"
+
+    @property
+    def quote(self) -> str:
+        return "pUSD" if self.venue == "PERPS" else "USDC"
+
+    @property
+    def is_long(self) -> bool:
+        return self.side in ("BUY", "LONG")
+
+    @property
+    def side_symbol(self) -> str:
+        return SIDE_SYMBOLS["BUY" if self.is_long else "SELL"]
+
+    @property
+    def status_symbol(self) -> str:
+        return STATUS_SYMBOLS.get(self.fill_status, "")
+
+    @property
+    def symbols(self) -> str:
+        """e.g. '🟤🟠' — side then fill status (status omitted when unknown)."""
+        return f"{self.side_symbol}{self.status_symbol}"
+
+    @property
+    def cash_str(self) -> str:
+        """e.g. '376.94 USDC', or '' when unknown."""
+        if self.cash is None:
+            return ""
+        return f"{fmt_num(self.cash, 2)} {self.cash_asset or self.quote}"
 
     @property
     def fill_status(self) -> str:
@@ -78,6 +116,8 @@ class Fill:
         parts.append(f"notional={fmt_num(self.notional, 2)}")
         if self.progress:
             parts.append(f"order={self.progress} {self.fill_status}")
+        if self.cash_str:
+            parts.append(f"cash={self.cash_str}")
         if self.fee:
             parts.append(f"fee={self.fee:g} {self.fee_asset}".rstrip())
         if self.flags:
